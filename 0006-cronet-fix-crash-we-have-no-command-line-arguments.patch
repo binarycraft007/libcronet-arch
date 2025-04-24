@@ -1,0 +1,25 @@
+From d242351154e8fc3345b3d709daf44a63ab0e16fe Mon Sep 17 00:00:00 2001
+From: Elliot Huang <elliot.huang@vantiva.com>
+Date: Fri, 25 Apr 2025 12:12:11 +0800
+Subject: [PATCH] cronet: fix crash, we have no command line arguments
+
+---
+ src/net/cert/internal/trust_store_chrome.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/net/cert/internal/trust_store_chrome.cc b/src/net/cert/internal/trust_store_chrome.cc
+index 5a3ce16a..a7e167b7 100644
+--- a/src/net/cert/internal/trust_store_chrome.cc
++++ b/src/net/cert/internal/trust_store_chrome.cc
+@@ -159,7 +159,7 @@ TrustStoreChrome::TrustStoreChrome()
+           kChromeRootCertList,
+           /*certs_are_static=*/true,
+           /*version=*/CompiledChromeRootStoreVersion(),
+-          /*override_constraints=*/InitializeConstraintsOverrides()) {}
++          /*override_constraints=*/{}) {}
+ 
+ TrustStoreChrome::TrustStoreChrome(base::span<const ChromeRootCertInfo> certs,
+                                    bool certs_are_static,
+-- 
+2.49.0
+

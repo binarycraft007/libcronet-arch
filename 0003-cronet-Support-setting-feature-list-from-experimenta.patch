@@ -1,0 +1,170 @@
+From 263bd29acf68d9d457a14c26896b4050810dc7cf Mon Sep 17 00:00:00 2001
+From: Elliot Huang <elliot.huang@vantiva.com>
+Date: Fri, 25 Apr 2025 10:19:17 +0800
+Subject: [PATCH 3/5] cronet: Support setting feature list from experimental
+ option
+
+---
+ .../cronet/android/cronet_library_loader.cc   |  3 ++-
+ src/components/cronet/cronet_global_state.h   |  3 ++-
+ .../cronet/cronet_global_state_stubs.cc       | 19 +++++++++++++------
+ src/components/cronet/native/engine.cc        | 18 ++++++++++++++++++
+ .../cronet/url_request_context_config.cc      |  9 +++++++++
+ .../cronet/url_request_context_config.h       |  2 ++
+ 6 files changed, 46 insertions(+), 8 deletions(-)
+
+diff --git a/src/components/cronet/android/cronet_library_loader.cc b/src/components/cronet/android/cronet_library_loader.cc
+index d9044663..6861bda8 100644
+--- a/src/components/cronet/android/cronet_library_loader.cc
++++ b/src/components/cronet/android/cronet_library_loader.cc
+@@ -188,7 +188,8 @@ void PostTaskToInitThread(const base::Location& posted_from,
+   g_init_task_executor->task_runner()->PostTask(posted_from, std::move(task));
+ }
+ 
+-void EnsureInitialized() {
++void EnsureInitialized(const char* enable_features = nullptr,
++                       const char* disable_features = nullptr);
+   if (g_init_task_executor) {
+     // Ensure that init is done on the init thread.
+     g_init_thread_init_done.Wait();
+diff --git a/src/components/cronet/cronet_global_state.h b/src/components/cronet/cronet_global_state.h
+index 3bd6201d..653be1f1 100644
+--- a/src/components/cronet/cronet_global_state.h
++++ b/src/components/cronet/cronet_global_state.h
+@@ -31,7 +31,8 @@ void PostTaskToInitThread(const base::Location& posted_from,
+ // or binding to an existing thread, to run initialization and process
+ // network notifications on. The implementation must be thread-safe and
+ // idempotent, and must complete initialization before returning.
+-void EnsureInitialized();
++void EnsureInitialized(const char* enable_features = nullptr,
++                       const char* disable_features = nullptr);
+ 
+ // Creates a proxy config service appropriate for this platform that fetches the
+ // system proxy settings. Cronet will call this API only after a prior call
+diff --git a/src/components/cronet/cronet_global_state_stubs.cc b/src/components/cronet/cronet_global_state_stubs.cc
+index d432ae23..2c5f37d6 100644
+--- a/src/components/cronet/cronet_global_state_stubs.cc
++++ b/src/components/cronet/cronet_global_state_stubs.cc
+@@ -23,14 +23,18 @@ namespace cronet {
+ 
+ namespace {
+ 
+-scoped_refptr<base::SingleThreadTaskRunner> InitializeAndCreateTaskRunner() {
++scoped_refptr<base::SingleThreadTaskRunner> InitializeAndCreateTaskRunner(
++    const char* enable_features,
++    const char* disable_features) {
+ // Cronet tests sets AtExitManager as part of TestSuite, so statically linked
+ // library is not allowed to set its own.
+ #if !defined(CRONET_TESTS_IMPLEMENTATION)
+   std::ignore = new base::AtExitManager;
+ #endif
+ 
+-  base::FeatureList::InitInstance(std::string(), std::string());
++  base::FeatureList::InitInstance(
++      enable_features ? enable_features : "",
++      disable_features ? disable_features : "");
+ 
+   // Note that in component builds this ThreadPoolInstance will be shared with
+   // the calling process, if it also depends on //base. In particular this means
+@@ -41,16 +45,19 @@ scoped_refptr<base::SingleThreadTaskRunner> InitializeAndCreateTaskRunner() {
+   return base::ThreadPool::CreateSingleThreadTaskRunner({});
+ }
+ 
+-base::SingleThreadTaskRunner* InitTaskRunner() {
++base::SingleThreadTaskRunner* InitTaskRunner(
++    const char* enable_features = nullptr,
++    const char* disable_features = nullptr) {
+   static scoped_refptr<base::SingleThreadTaskRunner> init_task_runner =
+-      InitializeAndCreateTaskRunner();
++      InitializeAndCreateTaskRunner(enable_features, disable_features);
+   return init_task_runner.get();
+ }
+ 
+ }  // namespace
+ 
+-void EnsureInitialized() {
+-  std::ignore = InitTaskRunner();
++void EnsureInitialized(const char* enable_features,
++                       const char* disable_features) {
++  std::ignore = InitTaskRunner(enable_features, disable_features);
+ }
+ 
+ bool OnInitThread() {
+diff --git a/src/components/cronet/native/engine.cc b/src/components/cronet/native/engine.cc
+index c35c4dbf..8525e90e 100644
+--- a/src/components/cronet/native/engine.cc
++++ b/src/components/cronet/native/engine.cc
+@@ -7,6 +7,7 @@
+ #include <unordered_set>
+ #include <utility>
+ 
++#include "base/base_switches.h"
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
+ #include "base/functional/bind.h"
+@@ -102,6 +103,23 @@ Cronet_EngineImpl::~Cronet_EngineImpl() {
+ 
+ Cronet_RESULT Cronet_EngineImpl::StartWithParams(
+     Cronet_EngineParamsPtr params) {
++  absl::optional<base::Value::Dict> experimental_options =
++      URLRequestContextConfig::ParseExperimentalOptions(
++          params->experimental_options);
++  if (experimental_options) {
++    const base::Value* feature_list =
++        experimental_options->Find("feature_list");
++    if (feature_list != nullptr && feature_list->is_dict()) {
++      const std::string* enable_features =
++          feature_list->GetDict().FindString(switches::kEnableFeatures);
++      const std::string* disable_features =
++          feature_list->GetDict().FindString(switches::kDisableFeatures);
++      cronet::EnsureInitialized(
++          enable_features ? enable_features->c_str() : nullptr,
++          disable_features ? disable_features->c_str() : nullptr);
++    }
++  }
++
+   cronet::EnsureInitialized();
+   base::AutoLock lock(lock_);
+ 
+diff --git a/src/components/cronet/url_request_context_config.cc b/src/components/cronet/url_request_context_config.cc
+index e235a3bb..260563ea 100644
+--- a/src/components/cronet/url_request_context_config.cc
++++ b/src/components/cronet/url_request_context_config.cc
+@@ -719,6 +719,15 @@ void URLRequestContextConfig::SetContextBuilderExperimentalOptions(
+         continue;
+       }
+       // Handled in CronetContext::NetworkTasks::BuildDefaultURLRequestContext.
++    } else if (iter->first == "feature_list") {
++      if (!iter->second.is_dict()) {
++        LOG(ERROR) << "\"" << iter->first << "\" config params \""
++                   << iter->second << "\" is not a dictionary value";
++        effective_experimental_options.Remove(iter->first);
++        continue;
++      }
++      // Already handled in Cronet_EngineImpl::StartWithParams.
++      // Only checks and reports errors here.
+     } else {
+       LOG(WARNING) << "Unrecognized Cronet experimental option \""
+                    << iter->first << "\" with params \"" << iter->second;
+diff --git a/src/components/cronet/url_request_context_config.h b/src/components/cronet/url_request_context_config.h
+index 3ce700f9..72f77dd6 100644
+--- a/src/components/cronet/url_request_context_config.h
++++ b/src/components/cronet/url_request_context_config.h
+@@ -246,12 +246,14 @@ struct URLRequestContextConfig {
+       // values. Do not specify for other targets.
+       std::optional<int> network_thread_priority);
+ 
++public:
+   // Parses experimental options from their JSON format to the format used
+   // internally.
+   // Returns an empty optional if the operation was unsuccessful.
+   static std::optional<base::Value::Dict> ParseExperimentalOptions(
+       std::string unparsed_experimental_options);
+ 
++private:
+   // Makes appropriate changes to settings in |this|.
+   void SetContextConfigExperimentalOptions();
+ 
+-- 
+2.49.0
+

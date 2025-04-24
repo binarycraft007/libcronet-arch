@@ -1,0 +1,69 @@
+From 4cf7d59eb7af0fa29928f2ae97b046e1bad5cb7e Mon Sep 17 00:00:00 2001
+From: Elliot Huang <elliot.huang@vantiva.com>
+Date: Fri, 25 Apr 2025 10:00:31 +0800
+Subject: [PATCH 1/5] cronet: Add cert net fetcher
+
+---
+ src/components/cronet/cronet_context.cc | 9 +++++++++
+ src/components/cronet/cronet_context.h  | 4 ++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/src/components/cronet/cronet_context.cc b/src/components/cronet/cronet_context.cc
+index b91e46e0..225d7c97 100644
+--- a/src/components/cronet/cronet_context.cc
++++ b/src/components/cronet/cronet_context.cc
+@@ -249,6 +249,10 @@ CronetContext::NetworkTasks::~NetworkTasks() {
+     network_quality_estimator_->RemoveRTTAndThroughputEstimatesObserver(this);
+   }
+ 
++  if (default_cert_net_fetcher_) {
++    default_cert_net_fetcher_->Shutdown();
++  }
++
+   if (net::NetworkChangeNotifier::AreNetworkHandlesSupported())
+     net::NetworkChangeNotifier::RemoveNetworkObserver(this);
+ }
+@@ -406,6 +410,9 @@ CronetContext::NetworkTasks::BuildDefaultURLRequestContext(
+         g_net_log.Get().net_log(), &context_builder);
+   }
+ 
++  default_cert_net_fetcher_ = base::MakeRefCounted<net::CertNetFetcherURLRequest>();
++  context_builder.SetCertVerifier(net::CertVerifier::CreateDefault(default_cert_net_fetcher_));
++
+   auto context = context_builder.Build();
+ 
+   // Set up host cache persistence if it's enabled. Happens after building the
+@@ -417,6 +424,8 @@ CronetContext::NetworkTasks::BuildDefaultURLRequestContext(
+         g_net_log.Get().net_log());
+   }
+ 
++  default_cert_net_fetcher_->SetURLRequestContext(context.get());
++
+   SetSharedURLRequestContextConfig(context.get());
+   return context;
+ }
+diff --git a/src/components/cronet/cronet_context.h b/src/components/cronet/cronet_context.h
+index b5163c84..0fa005f1 100644
+--- a/src/components/cronet/cronet_context.h
++++ b/src/components/cronet/cronet_context.h
+@@ -22,6 +22,7 @@
+ #include "components/prefs/json_pref_store.h"
+ #include "net/base/network_change_notifier.h"
+ #include "net/base/network_handle.h"
++#include "net/cert_net/cert_net_fetcher_url_request.h"
+ #include "net/nqe/effective_connection_type.h"
+ #include "net/nqe/effective_connection_type_observer.h"
+ #include "net/nqe/network_quality_estimator.h"
+@@ -331,6 +332,9 @@ class CronetContext {
+     base::flat_map<net::handles::NetworkHandle,
+                    std::unique_ptr<net::URLRequestContext>>
+         contexts_;
++
++    scoped_refptr<net::CertNetFetcherURLRequest> default_cert_net_fetcher_;
++
+     // Shorthand for the default context (needed by
+     // components/cronet/android/test/cronet_test_util.cc).
+     raw_ptr<net::URLRequestContext> default_context_;
+-- 
+2.49.0
+

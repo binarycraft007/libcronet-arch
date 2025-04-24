@@ -1,0 +1,104 @@
+From 4760f5dbc80809555fe84d93d54f61bd1d74c0ea Mon Sep 17 00:00:00 2001
+From: Elliot Huang <elliot.huang@vantiva.com>
+Date: Fri, 25 Apr 2025 10:02:04 +0800
+Subject: [PATCH 2/5] cronet: Use fixed proxy resolution from experimental
+ option proxy_server
+
+---
+ src/components/cronet/cronet_context.cc       | 22 ++++++++++++++++---
+ .../cronet/cronet_global_state_stubs.cc       |  6 ++---
+ .../cronet/url_request_context_config.cc      |  8 +++++++
+ 3 files changed, 29 insertions(+), 7 deletions(-)
+
+diff --git a/src/components/cronet/cronet_context.cc b/src/components/cronet/cronet_context.cc
+index 225d7c97..9a610818 100644
+--- a/src/components/cronet/cronet_context.cc
++++ b/src/components/cronet/cronet_context.cc
+@@ -12,6 +12,7 @@
+ #include <map>
+ #include <memory>
+ #include <set>
++#include <string>
+ #include <utility>
+ 
+ #include "base/base64.h"
+@@ -56,7 +57,10 @@
+ #include "net/log/net_log_util.h"
+ #include "net/net_buildflags.h"
+ #include "net/nqe/network_quality_estimator_params.h"
++#include "net/proxy_resolution/configured_proxy_resolution_service.h"
++#include "net/proxy_resolution/proxy_config.h"
+ #include "net/proxy_resolution/proxy_config_service_fixed.h"
++#include "net/proxy_resolution/proxy_config_with_annotation.h"
+ #include "net/proxy_resolution/proxy_resolution_service.h"
+ #include "net/third_party/quiche/src/quiche/quic/core/quic_versions.h"
+ #include "net/url_request/url_request_context.h"
+@@ -362,9 +366,21 @@ CronetContext::NetworkTasks::BuildDefaultURLRequestContext(
+   context_config_->ConfigureURLRequestContextBuilder(&context_builder);
+   SetSharedURLRequestContextBuilderConfig(&context_builder);
+ 
+-  context_builder.set_proxy_resolution_service(
+-      cronet::CreateProxyResolutionService(std::move(proxy_config_service),
+-                                           g_net_log.Get().net_log()));
++  const base::Value* proxy_server =
++      context_config_->effective_experimental_options.Find("proxy_server");
++  std::string proxy_server_str = "direct://";
++  if (proxy_server != nullptr && proxy_server->is_string()) {
++    proxy_server_str = proxy_server->GetString();
++  }
++  net::ProxyConfig proxy_config;
++  proxy_config.proxy_rules().ParseFromString(proxy_server_str);
++  auto proxy_service =
++      net::ConfiguredProxyResolutionService::CreateWithoutProxyResolver(
++          std::make_unique<net::ProxyConfigServiceFixed>(
++              net::ProxyConfigWithAnnotation(proxy_config,
++                                             MISSING_TRAFFIC_ANNOTATION)),
++          g_net_log.Get().net_log());
++  context_builder.set_proxy_resolution_service(std::move(proxy_service));
+ 
+   if (context_config_->enable_network_quality_estimator) {
+     std::unique_ptr<net::NetworkQualityEstimatorParams> nqe_params =
+diff --git a/src/components/cronet/cronet_global_state_stubs.cc b/src/components/cronet/cronet_global_state_stubs.cc
+index e1162a78..d432ae23 100644
+--- a/src/components/cronet/cronet_global_state_stubs.cc
++++ b/src/components/cronet/cronet_global_state_stubs.cc
+@@ -64,15 +64,13 @@ void PostTaskToInitThread(const base::Location& posted_from,
+ 
+ std::unique_ptr<net::ProxyConfigService> CreateProxyConfigService(
+     const scoped_refptr<base::SequencedTaskRunner>& io_task_runner) {
+-  return net::ProxyConfigService::CreateSystemProxyConfigService(
+-      io_task_runner);
++  return nullptr;
+ }
+ 
+ std::unique_ptr<net::ProxyResolutionService> CreateProxyResolutionService(
+     std::unique_ptr<net::ProxyConfigService> proxy_config_service,
+     net::NetLog* net_log) {
+-  return net::ConfiguredProxyResolutionService::CreateUsingSystemProxyResolver(
+-      std::move(proxy_config_service), net_log, /*quick_check_enabled=*/true);
++  return nullptr;
+ }
+ 
+ std::string CreateDefaultUserAgent(const std::string& partial_user_agent) {
+diff --git a/src/components/cronet/url_request_context_config.cc b/src/components/cronet/url_request_context_config.cc
+index 4816ee6d..e235a3bb 100644
+--- a/src/components/cronet/url_request_context_config.cc
++++ b/src/components/cronet/url_request_context_config.cc
+@@ -711,6 +711,14 @@ void URLRequestContextConfig::SetContextBuilderExperimentalOptions(
+         continue;
+       }
+       session_params->spdy_go_away_on_ip_change = iter->second.GetBool();
++    } else if (iter->first == "proxy_server") {
++      if (!iter->second.is_string()) {
++        LOG(ERROR) << "\"" << iter->first << "\" config params \""
++                   << iter->second << "\" is not a string";
++        effective_experimental_options.Remove(iter->first);
++        continue;
++      }
++      // Handled in CronetContext::NetworkTasks::BuildDefaultURLRequestContext.
+     } else {
+       LOG(WARNING) << "Unrecognized Cronet experimental option \""
+                    << iter->first << "\" with params \"" << iter->second;
+-- 
+2.49.0
+
