@@ -1,0 +1,31 @@
+From 1633ce761cf2a1f9dd6c2f4d0348042e0cec9771 Mon Sep 17 00:00:00 2001
+From: Elliot Huang <elliot.huang@vantiva.com>
+Date: Mon, 28 Apr 2025 14:07:31 +0800
+Subject: [PATCH] net: Allow overriding CONNECT authority with header
+
+The -connect-authority header overrides the CONNECT authority field.
+
+The Cronet bidirectional_stream API does not have a way to pass in this
+field to support tunnels, so it has to be smuggled in via a header.
+---
+ src/net/spdy/spdy_http_utils.cc | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/net/spdy/spdy_http_utils.cc b/src/net/spdy/spdy_http_utils.cc
+index 7102d625..bb2d563b 100644
+--- a/src/net/spdy/spdy_http_utils.cc
++++ b/src/net/spdy/spdy_http_utils.cc
+@@ -215,6 +215,10 @@ void CreateSpdyHeadersFromHttpRequest(const HttpRequestInfo& info,
+   HttpRequestHeaders::Iterator it(request_headers);
+   while (it.GetNext()) {
+     std::string name = base::ToLowerASCII(it.name());
++    if (info.method == "CONNECT" && name == "-connect-authority") {
++      (*headers)[spdy::kHttp2AuthorityHeader] = it.value();
++      continue;
++    }
+     if (name.empty() || name[0] == ':' || name == "connection" ||
+         name == "proxy-connection" || name == "transfer-encoding" ||
+         name == "host") {
+-- 
+2.49.0
+

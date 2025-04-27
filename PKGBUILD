@@ -26,6 +26,8 @@ source=(
   "0004-net-grpc_support-Set-NetworkIsolationKey-from-header.patch"
   "0005-cronet-Support-setting-socket-limits-from-experiment.patch"
   "0006-cronet-fix-crash-we-have-no-command-line-arguments.patch"
+  "0007-grpc_support-Fix-CFI-icall-breakage.patch"
+  "0008-net-Allow-overriding-CONNECT-authority-with-header.patch"
 )
 
 noextract=(
@@ -40,7 +42,9 @@ sha256sums=('d5f9d74f28369c40cce7acc220438e59e264f4bdb953dad314c82b111129a23e'
 	    'f9357a0fd230751b86b65c9607ee2d599c2ab9c3bab1dccea0919b43338e6e64'
 	    '507baa735fa2974a9d9c0dcd051ed8bb8a080ebe0407447c67a9f6519625c159'
 	    '056be302a4fa1c837cbbb12a51def17f398d4ae5b5fb2062ae7643b64c5815cc'
-	    'cbee443f6b4508cf894aac4f515c27bd6fd5c7330539da6c45948327091b1e3f')
+	    'cbee443f6b4508cf894aac4f515c27bd6fd5c7330539da6c45948327091b1e3f'
+	    '296136c999afdd0cfcb632461e25af9ffec4be8671414a41580a55746e1160fd'
+	    '5b35d2ba0c109fb448759bf54151079e37314e5a0a60e1d1565f9cad8200eac7')
 
 provides=('libcronet')
 conflicts=('libcronet-git' 'libcronet-bin')
@@ -71,6 +75,8 @@ build() {
   mkdir -p "$TMPDIR"
 
   out=out/Release
+  flags="
+    is_official_build=true"
 
   PYTHON=$(which python3 2>/dev/null)
 
@@ -79,13 +85,11 @@ build() {
   export CCACHE_CPP2=yes
   CCACHE=ccache
 
-  flags="
+  flags="$flags
     cc_wrapper=\"$CCACHE\""
 
   if (( _DEBUG )); then
     flags="$flags"'
-      is_debug=true
-      is_component_build=true
       chrome_pgo_phase=0
     '
   else
@@ -125,12 +129,13 @@ build() {
     include_transport_security_state_preload_list=false
     enable_device_bound_sessions=false
     enable_bracketed_proxy_uris=true
+    enable_quic_proxy_support=true
 
     use_nss_certs=false
-  
+
     enable_backup_ref_ptr_support=false
     enable_dangling_raw_ptr_checks=false
-
+    enable_shadow_metadata=false
     disable_histogram_support=true
   '
 
